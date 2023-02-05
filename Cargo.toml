@@ -1,0 +1,25 @@
+[package]
+name = "pdbcrust"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "pdbcrust"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
+strip = true
+lto = true
+
+#[[bin]]
+#name = "pdbcrust"
+#path = "src/bin.rs"
+
+[dependencies]
+pdb = "0.8.0"
+lazy_static = "1.4.0"
+reqwest = { version = "0.11.0", features = ["blocking"] }
