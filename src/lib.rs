@@ -141,6 +141,7 @@ fn symbol_name_from_offset(id : usize, symbol_offset : u32) -> ResultEx<(String,
     let _lock = ctx.lock.lock();
     let mut symbols_iter = ctx.symbol_table.iter();
     let mut symbol_data_valid : Option<pdb::PublicSymbol> = None;
+    let mut symbol_rva_valid = 0;
     loop {
         let symbol = match symbols_iter.next()? {
             None => break,
@@ -151,19 +152,20 @@ fn symbol_name_from_offset(id : usize, symbol_offset : u32) -> ResultEx<(String,
             _ => continue,
         };
         let symbol_rva = symbol_data.offset.to_rva(&ctx.address_map).unwrap_or_default().0;
-        if symbol_rva > symbol_offset {
-            break;
-        }
-        if symbol_rva != 0 {
+        if (symbol_rva <= symbol_offset) && (symbol_rva > symbol_rva_valid) && (symbol_rva != 0) {
             symbol_data_valid = Some(symbol_data);
+            symbol_rva_valid = symbol_rva;
+            if symbol_rva == symbol_offset {
+                break;
+            }
         }
     }
     if symbol_data_valid == None {
         return Err("symbol_name_from_offset: not found".into());
     }
     let symbol_data = symbol_data_valid.unwrap();
-    let symbol_rva = symbol_data.offset.to_rva(&ctx.address_map).unwrap_or_default().0;
-    let symbol_displacement = symbol_rva - symbol_offset;
+    let symbol_rva = symbol_rva_valid;
+    let symbol_displacement = symbol_offset - symbol_rva;
     if symbol_rva == 0 || symbol_displacement > 0x00010000 {
         return Err("symbol_name_from_offset: not found".into());
     }
