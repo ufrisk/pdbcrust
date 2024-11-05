@@ -133,13 +133,14 @@ fn symbol_offset(id : usize, symbol_name : &str) -> ResultEx<u32>
     return Err("symbol_offset: not found".into());
 }
 
-/// Fetch a symbol name given the symbol offset.
+/// Fetch a symbol name and displacement given the symbol offset.
 ///
-fn symbol_name_from_offset(id : usize, symbol_offset : u32) -> ResultEx<String>
+fn symbol_name_from_offset(id : usize, symbol_offset : u32) -> ResultEx<(String, u32)>
 {
     let ctx = get_context(id)?;
     let _lock = ctx.lock.lock();
     let mut symbols_iter = ctx.symbol_table.iter();
+    let mut symbol_data_valid : Option<pdb::PublicSymbol> = None;
     loop {
         let symbol = match symbols_iter.next()? {
             None => break,
@@ -149,11 +150,24 @@ fn symbol_name_from_offset(id : usize, symbol_offset : u32) -> ResultEx<String>
             Ok(pdb::SymbolData::Public(r)) => r,
             _ => continue,
         };
-        if symbol_offset == symbol_data.offset.to_rva(&ctx.address_map).unwrap_or_default().0 {
-            return Ok(symbol_data.name.to_string().into());
+        let symbol_rva = symbol_data.offset.to_rva(&ctx.address_map).unwrap_or_default().0;
+        if symbol_rva > symbol_offset {
+            break;
+        }
+        if symbol_rva != 0 {
+            symbol_data_valid = Some(symbol_data);
         }
     }
-    return Err("symbol_name_from_offset: not found".into());
+    if symbol_data_valid == None {
+        return Err("symbol_name_from_offset: not found".into());
+    }
+    let symbol_data = symbol_data_valid.unwrap();
+    let symbol_rva = symbol_data.offset.to_rva(&ctx.address_map).unwrap_or_default().0;
+    let symbol_displacement = symbol_rva - symbol_offset;
+    if symbol_rva == 0 || symbol_displacement > 0x00010000 {
+        return Err("symbol_name_from_offset: not found".into());
+    }
+    return Ok((symbol_data.name.to_string().into(), symbol_displacement));
 }
 
 /// Fetch the size of a type/struct.
@@ -295,7 +309,7 @@ pub mod tests {
         let pdb_file = pdb_download_ensure(std::env::temp_dir().to_str().unwrap(), "BF32B9F6C843C1ACB8AD7DFF56370AFE1", "ntkrnlmp.pdb", true).unwrap();
         let id = open(&pdb_file).unwrap();
         assert_eq!(symbol_offset(id, "MmPfnDatabase").unwrap(), 5501856);
-        assert_eq!(symbol_name_from_offset(id, 5501856).unwrap(), String::from("MmPfnDatabase"));
+        assert_eq!(symbol_name_from_offset(id, 5501856).unwrap(), (String::from("MmPfnDatabase"), 0));
         assert_eq!(type_size(id, "_FILE_OBJECT").unwrap(), 216);
         assert_eq!(type_size(id, "_EPROCESS").unwrap(), 2136);
         assert_eq!(type_child_offset(id, "_FILE_OBJECT", "Vpb").unwrap(), 16);
@@ -365,11 +379,11 @@ pub extern "C" fn pdbcrust_symbol_name_from_offset(
     c_symbol_name: *mut c_char,
     c_symbol_deplacement: *mut i32
 ) -> bool {
-    let symbol_name = match symbol_name_from_offset(id, symbol_offset) {
+    let symbol_name_and_displacement = match symbol_name_from_offset(id, symbol_offset) {
         Err(_) => return false,
         Ok(r) => r,
     };
-    let symbol_name_cstring = match CString::new(symbol_name) {
+    let symbol_name_cstring = match CString::new(symbol_name_and_displacement.0) {
         Err(_) => return false,
         Ok(r) => r,
     };
@@ -379,7 +393,7 @@ pub extern "C" fn pdbcrust_symbol_name_from_offset(
     }
     unsafe {
         std::ptr::copy(symbol_name_bytes.as_ptr().cast(), c_symbol_name, symbol_name_bytes.len());
-        *c_symbol_deplacement = 0;
+        *c_symbol_deplacement = symbol_name_and_displacement.1 as i32;
     }
     return true;
 }
